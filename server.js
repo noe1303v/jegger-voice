@@ -9,59 +9,79 @@ const io = socketIo(server, { cors: { origin: "*" } });
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
+// Base de données temporaire des joueurs connectés
 let positionsJoueurs = {};
 
+// Route appelée par Roblox pour envoyer ses positions et récupérer les connectés
 app.post('/update-positions', (req, res) => {
     const { userId, username, x, y, z } = req.body;
-    if (!userId) return res.status(400).json({ error: "Id joueur manquant" });
+    
+    if (userId) {
+        const idString = userId.toString();
+        // Si le joueur existe déjà via le site web, on met juste à jour sa position Roblox
+        if (positionsJoueurs[idString]) {
+            positionsJoueurs[idString].x = parseFloat(x);
+            positionsJoueurs[idString].y = parseFloat(y);
+            positionsJoueurs[idString].z = parseFloat(z);
+            positionsJoueurs[idString].robloxActive = true;
+        } else {
+            // Si le joueur n'a pas encore ouvert le site, on l'enregistre quand même en attente
+            positionsJoueurs[idString] = {
+                username: username || "Inconnu",
+                x: parseFloat(x), y: parseFloat(y), z: parseFloat(z),
+                vocalActive: false,
+                robloxActive: true,
+                lastUpdate: Date.now()
+            };
+        }
+        positionsJoueurs[idString].lastUpdate = Date.now();
+    }
 
-    positionsJoueurs[userId] = {
-        username: username,
-        x: parseFloat(x),
-        y: parseFloat(y),
-        z: parseFloat(z),
-        lastUpdate: Date.now()
-    };
-
+    // Nettoyage des joueurs déconnectés (sans signe de vie depuis 12 secondes)
     const maintenant = Date.now();
     Object.keys(positionsJoueurs).forEach(id => {
-        if (maintenant - positionsJoueurs[id].lastUpdate > 10000) {
+        if (maintenant - positionsJoueurs[id].lastUpdate > 12000) {
             delete positionsJoueurs[id];
         }
     });
 
+    // On renvoie la liste à Roblox
     res.json({ success: true, positions: positionsJoueurs });
 });
 
+// Gestion du site web et des micros
 io.on('connection', (socket) => {
-    console.log("Un joueur s'est connecté au système audio !");
-
     socket.on('join-voice', (userId) => {
-        socket.userId = userId;
+        if (!userId) return;
+        const idString = userId.toString();
+        socket.userId = idString;
         socket.join("salon-vocal-global");
-        console.log(`Joueur lié à l'ID Roblox : ${userId}`);
-    });
 
-    socket.on('signal', (data) => {
-        io.to("salon-vocal-global").emit('signal-recu', {
-            emetteur: socket.userId,
-            donnees: data.signal,
-            cible: data.cible
-        });
+        // Force l'activation du statut vocal sur le serveur
+        if (!positionsJoueurs[idString]) {
+            positionsJoueurs[idString] = { username: "Via Web", x: 0, y: 0, z: 0, robloxActive: false };
+        }
+        positionsJoueurs[idString].vocalActive = true;
+        positionsJoueurs[idString].lastUpdate = Date.now();
+        
+        console.log(`[SERVEUR] Le joueur ${idString} a activé son vocal sur le site !`);
     });
 
     socket.on('disconnect', () => {
-        console.log("Un joueur a fermé la page audio.");
+        if (socket.userId && positionsJoueurs[socket.userId]) {
+            positionsJoueurs[socket.userId].vocalActive = false;
+        }
     });
 });
 
+// Page HTML web affichée sur Render
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
         <html lang="fr">
         <head>
             <meta charset="UTF-8">
-            <title>Jegger City - Chat Vocal de Proximité</title>
+            <title>Jegger City - Chat Vocal</title>
         </head>
         <body style="font-family: Arial, sans-serif; text-align: center; padding-top: 80px; background: #1a1a1a; color: white;">
             <h1 style="color: #00a2ff;">Jegger City Voice Connect</h1>
@@ -72,23 +92,22 @@ app.get('/', (req, res) => {
                 <button onclick="lancerAudio()" style="padding: 12px 25px; font-size: 16px; background: #00a2ff; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">Lancer la Connexion</button>
             </div>
             
-            <p style="color: #888; margin-top: 40px; font-size: 14px;">Laisse cet onglet ouvert en arrière-plan pendant que tu joues.</p>
+            <p id="statut" style="color: #bbb; margin-top: 20px; font-size: 16px; font-weight: bold;"></p>
 
             <script src="/socket.io/socket.io.js"></script>
             <script>
                 const socket = io();
-                let monStream;
-
                 async function lancerAudio() {
-                    const userId = document.getElementById('uid').value;
-                    if(!userId) return alert("Erreur : Tu dois renseigner ton ID Roblox !");
+                    const userId = document.getElementById('uid').value.trim();
+                    if(!userId) return alert("Erreur : Tu devez entrer ton ID Roblox !");
                     
                     try {
-                        monStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                        await navigator.mediaDevices.getUserMedia({ audio: true });
                         socket.emit('join-voice', userId);
-                        alert("Micro synchronisé avec succès ! Tu peux retourner sur Roblox.");
+                        document.getElementById('statut').innerText = "🔴 Connexion active ! Laisse cet onglet ouvert.";
+                        document.getElementById('statut').style.color = "#00ff64";
                     } catch(err) {
-                        alert("Erreur : Impossible d'accéder à ton micro. Vérifie tes autorisations de navigateur.");
+                        alert("Erreur micro : Vérifie les autorisations de ton navigateur.");
                     }
                 }
             </script>
@@ -97,4 +116,4 @@ app.get('/', (req, res) => {
     `);
 });
 
-server.listen(PORT, () => console.log(`Serveur de chat vocal démarré sur le port ${PORT}`));
+server.listen(PORT, () => console.log(`Serveur actif sur le port ${PORT}`));
