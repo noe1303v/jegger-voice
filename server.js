@@ -24,7 +24,9 @@ app.post('/update-positions', (req, res) => {
         } else {
             positionsJoueurs[idString] = {
                 username: username || "Inconnu",
-                x = parseFloat(x), y = parseFloat(y), z = parseFloat(z),
+                x: parseFloat(x), 
+                y: parseFloat(y), 
+                z: parseFloat(z),
                 vocalActive: false,
                 robloxActive: true,
                 lastUpdate: Date.now()
@@ -58,7 +60,6 @@ io.on('connection', (socket) => {
         console.log(`[SERVEUR] Joueur ${idString} connecté au vocal.`);
     });
 
-    // Gestion de la déconnexion volontaire via le bouton
     socket.on('leave-voice', () => {
         if (socket.userId && positionsJoueurs[socket.userId]) {
             positionsJoueurs[socket.userId].vocalActive = false;
@@ -94,8 +95,7 @@ app.get('/', (req, res) => {
                 <div id="statut-container" style="display: none;">
                     <p id="statut" style="color: #00ff64; font-size: 18px; font-weight: bold; margin-bottom: 15px;">🔴 Connexion active ! Laisse cet onglet ouvert.</p>
                     
-                    <!-- Indicateur visuel du micro (Test de fonctionnement) -->
-                    <p style="font-size: 14px; color: #aaa; margin-bottom: 5px;">Test Micro ( doît bouger quand tu parles ) :</p>
+                    <p style="font-size: 14px; color: #aaa; margin-bottom: 5px;">Test Micro (doit bouger quand tu parles) :</p>
                     <div style="width: 250px; height: 15px; background: #444; border-radius: 10px; margin: 0 auto 25px auto; overflow: hidden;">
                         <div id="barre-volume" style="width: 0%; height: 100%; background: #00ff64; transition: width 0.1s ease;"></div>
                     </div>
@@ -112,7 +112,6 @@ app.get('/', (req, res) => {
                 let monStream = null;
                 let audioContext = null;
                 let analyser = null;
-                let javascriptNode = null;
 
                 async function lancerAudio() {
                     const userId = document.getElementById('uid').value.trim();
@@ -122,11 +121,9 @@ app.get('/', (req, res) => {
                         monStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                         socket.emit('join-voice', userId);
                         
-                        // Affichage de l'interface de contrôle
                         document.getElementById('formulaire').style.display = 'none';
                         document.getElementById('statut-container').style.display = 'block';
                         
-                        // Système de vérification visuelle du micro
                         audioContext = new (window.AudioContext || window.webkitAudioContext)();
                         analyser = audioContext.createAnalyser();
                         const source = audioContext.createMediaStreamSource(monStream);
@@ -144,8 +141,7 @@ app.get('/', (req, res) => {
                                 total += dataArray[i];
                             }
                             let volume = total / bufferLength;
-                            // Ajustement pour rendre la barre dynamique
-                            let pourcentage = Math.min(100, Math.floor(volume * 2));
+                            let pourcentage = Math.min(100, Math.floor(volume * 3));
                             document.getElementById('barre-volume').style.width = pourcentage + "%";
                             requestAnimationFrame(verifierVolume);
                         }
@@ -160,7 +156,6 @@ app.get('/', (req, res) => {
                 function couperConnexion() {
                     socket.emit('leave-voice');
                     
-                    // Arrêt du flux micro
                     if (monStream) {
                         monStream.getTracks().forEach(track => track.stop());
                         monStream = null;
@@ -169,7 +164,6 @@ app.get('/', (req, res) => {
                         audioContext.close();
                     }
                     
-                    // Retour à l'écran de connexion
                     document.getElementById('barre-volume').style.width = "0%";
                     document.getElementById('statut-container').style.display = 'none';
                     document.getElementById('formulaire').style.display = 'block';
