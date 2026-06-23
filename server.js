@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 let positionsJoueurs = {};
+const DISTANCE_MAX_ENTENDRE = 80; // Distance max dans Roblox (en studs) pour s'entendre
 
 app.post('/update-positions', (req, res) => {
     const { userId, username, x, y, z } = req.body;
@@ -46,7 +47,9 @@ app.post('/update-positions', (req, res) => {
     res.json({ success: true, positions: positionsJoueurs });
 });
 
+// Gestion du Peer-to-Peer Audio (WebRTC via Socket.io)
 io.on('connection', (socket) => {
+    
     socket.on('join-voice', (userId) => {
         if (!userId) return;
         const idString = userId.toString();
@@ -59,14 +62,24 @@ io.on('connection', (socket) => {
         positionsJoueurs[idString].vocalActive = true;
         positionsJoueurs[idString].isMuted = false;
         positionsJoueurs[idString].lastUpdate = Date.now();
+        
+        // On signale aux autres qu'un nouveau joueur est prêt à échanger du son
+        socket.to("salon-vocal-global").emit('joueur-rejoint', idString);
         console.log(`[SERVEUR] Joueur ${idString} connecté au vocal.`);
     });
 
-    // Événement quand le joueur change son état mute/demute
+    // Relais des clés de connexion WebRTC (Signaling)
+    socket.on('signal-audio', (data) => {
+        io.to("salon-vocal-global").emit('relais-signal', {
+            emetteur: socket.userId,
+            cible: data.cible,
+            signal: data.signal
+        });
+    });
+
     socket.on('toggle-mute', (muteState) => {
         if (socket.userId && positionsJoueurs[socket.userId]) {
             positionsJoueurs[socket.userId].isMuted = muteState;
-            console.log(`[SERVEUR] État Mute de ${socket.userId} : ${muteState}`);
         }
     });
 
@@ -75,6 +88,7 @@ io.on('connection', (socket) => {
             positionsJoueurs[socket.userId].vocalActive = false;
             positionsJoueurs[socket.userId].isMuted = false;
         }
+        socket.leave("salon-vocal-global");
     });
 
     socket.on('disconnect', () => {
@@ -120,6 +134,8 @@ app.get('/', (req, res) => {
                     </div>
                 </div>
             </div>
+
+            <div id="audios-distants"></div>
             
             <p style="color: #888; margin-top: 40px; font-size: 14px;">Laisse cet onglet ouvert en arrière-plan pendant que tu joues.</p>
 
@@ -131,14 +147,20 @@ app.get('/', (req, res) => {
                 let analyser = null;
                 let gainNode = null;
                 let estMute = false;
+                let monId = null;
+
+                let connexionsPairs = {}; // Stocke les liaisons WebRTC avec les autres
+                let noeudsGainDistants = {}; // Stocke le contrôle du volume de chaque joueur
+
+                const configurationPeer = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
                 async function lancerAudio() {
-                    const userId = document.getElementById('uid').value.trim();
-                    if(!userId) return alert("Erreur : Tu devez entrer ton ID Roblox !");
+                    monId = document.getElementById('uid').value.trim();
+                    if(!monId) return alert("Erreur : Entre ton ID Roblox !");
                     
                     try {
                         monStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                        socket.emit('join-voice', userId);
+                        socket.emit('join-voice', monId);
                         
                         document.getElementById('formulaire').style.display = 'none';
                         document.getElementById('statut-container').style.display = 'block';
@@ -148,8 +170,6 @@ app.get('/', (req, res) => {
                         gainNode = audioContext.createGain();
                         
                         const source = audioContext.createMediaStreamSource(monStream);
-                        
-                        // Chaîne de traitement audio : Source -> Gain (Volume) -> Analyser (Barre)
                         source.connect(gainNode);
                         gainNode.connect(analyser);
                         
@@ -157,41 +177,144 @@ app.get('/', (req, res) => {
                         const bufferLength = analyser.frequencyBinCount;
                         const dataArray = new Uint8Array(bufferLength);
                         
-                        // Gestionnaire du slider de volume
                         const slider = document.getElementById('volume-slider');
                         slider.oninput = function() {
-                            if(!estMute && gainNode) {
-                                gainNode.gain.value = this.value;
-                            }
+                            if(!estMute && gainNode) gainNode.gain.value = this.value;
                         };
 
                         function verifierVolume() {
                             if (!monStream || !analyser) return;
                             analyser.getByteFrequencyData(dataArray);
                             let total = 0;
-                            for (let i = 0; i < bufferLength; i++) {
-                                total += dataArray[i];
-                            }
+                            for (let i = 0; i < bufferLength; i++) total += dataArray[i];
                             let volume = total / bufferLength;
                             let pourcentage = Math.min(100, Math.floor(volume * 3));
-                            
-                            // Si muté, on force la barre graphique à zéro
                             document.getElementById('barre-volume').style.width = estMute ? "0%" : pourcentage + "%";
                             requestAnimationFrame(verifierVolume);
                         }
                         verifierVolume();
 
+                        // Actualisation en boucle de la distance audio (3D Proximity)
+                        setInterval(calculerDistancesAudio, 500);
+
                     } catch(err) {
-                        alert("Erreur micro : Vérifie les autorisations de ton navigateur.");
+                        alert("Erreur micro : Vérifie les autorisations.");
                         console.error(err);
+                    }
+                }
+
+                // Quand un autre joueur rejoint le vocal, on ouvre le tunnel de communication
+                socket.on('joueur-rejoint', async (idDistant) => {
+                    if (idDistant === monId) return;
+                    creerLiaisonPeer(idDistant, true);
+                });
+
+                // Réception des signaux de configuration réseau
+                socket.on('relais-signal', async (data) => {
+                    if (data.cible !== monId) return;
+                    
+                    if (!connexionsPairs[data.emetteur]) {
+                        creerLiaisonPeer(data.emetteur, false);
+                    }
+                    
+                    await connexionsPairs[data.emetteur].setRemoteDescription(new RTCSessionDescription(data.signal));
+                    if (data.signal.type === 'offer') {
+                        const answer = await connexionsPairs[data.emetteur].createAnswer();
+                        await connexionsPairs[data.emetteur].setLocalDescription(answer);
+                        socket.emit('signal-audio', { cible: data.emetteur, signal: answer });
+                    }
+                });
+
+                function creerLiaisonPeer(idDistant, initierOffre) {
+                    const peer = new RTCPeerConnection(configurationPeer);
+                    connexionsPairs[idDistant] = peer;
+
+                    monStream.getTracks().forEach(track => peer.addTrack(track, monStream));
+
+                    peer.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            // Pas besoin de forcer les candidats ICE séparément avec cette architecture simplifiée
+                        }
+                    };
+
+                    // Quand on reçoit la voix de l'autre joueur
+                    peer.ontrack = (event) => {
+                        if (noeudsGainDistants[idDistant]) return; // Déjà configuré
+
+                        const fluxDistant = event.streams[0];
+                        
+                        // Création du système audio spatialisé pour ce joueur précis
+                        const ctx = audioContext;
+                        const sourceDistante = ctx.createMediaStreamSource(fluxDistant);
+                        const gainDistant = ctx.createGain();
+                        
+                        gainDistant.gain.value = 0; // Muet par défaut tant qu'on ne connaît pas sa position
+                        
+                        sourceDistante.connect(gainDistant);
+                        gainDistant.connect(ctx.destination); // Envoi dans tes haut-parleurs/écouteurs
+                        
+                        noeudsGainDistants[idDistant] = gainDistant;
+                    };
+
+                    if (initierOffre) {
+                        peer.onnegotiationneeded = async () => {
+                            const offer = await peer.createOffer();
+                            await peer.setLocalDescription(offer);
+                            socket.emit('signal-audio', { cible: idDistant, signal: offer });
+                        };
+                    }
+                }
+
+                // Fonction magique qui calcule la distance et ajuste le volume en direct
+                async function calculerDistancesAudio() {
+                    if (!monId || !audioContext) return;
+
+                    try {
+                        // Demande la liste des positions au serveur
+                        const response = await fetch('/update-positions', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userId: monId, x: 0, y: 0, z: 0 }) // Demande passive
+                        });
+                        const data = await response.json();
+                        
+                        if (!data.positions || !data.positions[monId]) return;
+                        
+                        const maPos = data.positions[monId];
+
+                        // Pour chaque joueur dont on reçoit la voix
+                        Object.keys(noeudsGainDistants).forEach(idDistant => {
+                            const posAutre = data.positions[idDistant];
+                            
+                            if (posAutre && posAutre.robloxActive) {
+                                // Formule mathématique de distance 3D (Pythagore)
+                                const dx = maPos.x - posAutre.x;
+                                const dy = maPos.y - posAutre.y;
+                                const dz = maPos.z - posAutre.z;
+                                const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                                if (distance <= ${DISTANCE_MAX_ENTENDRE}) {
+                                    // Plus il est proche, plus le volume est fort (Linear Rolloff)
+                                    let volumeCalculé = 1 - (distance / ${DISTANCE_MAX_ENTENDRE});
+                                    noeudsGainDistants[idDistant].gain.setTargetAtTime(volumeCalculé, audioContext.currentTime, 0.1);
+                                } else {
+                                    // Trop loin -> Muet
+                                    noeudsGainDistants[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
+                                }
+                            } else {
+                                // Pas sur Roblox -> Muet
+                                noeudsGainDistants[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
+                            }
+                        });
+
+                    } catch (e) {
+                        console.error("Erreur calcul distance audio:", e);
                     }
                 }
 
                 function toggleMute() {
                     if(!monStream || !gainNode) return;
                     estMute = !estMute;
-                    
-                    // Coupe ou réactive la piste audio du micro directement
                     monStream.getAudioTracks().forEach(track => track.enabled = !estMute);
                     
                     const btn = document.getElementById('btn-mute');
@@ -208,8 +331,6 @@ app.get('/', (req, res) => {
                         document.getElementById('statut').innerText = "🔴 Connexion active ! Laisse cet onglet ouvert.";
                         document.getElementById('statut').style.color = "#00ff64";
                     }
-                    
-                    // Informe le serveur de l'état Mute pour le transmettre à Roblox
                     socket.emit('toggle-mute', estMute);
                 }
 
@@ -217,13 +338,17 @@ app.get('/', (req, res) => {
                     socket.emit('leave-voice');
                     estMute = false;
                     
+                    Object.keys(connexionsPairs).forEach(id => {
+                        connexionsPairs[id].close();
+                    });
+                    connexionsPairs = {};
+                    noeudsGainDistants = {};
+
                     if (monStream) {
                         monStream.getTracks().forEach(track => track.stop());
                         monStream = null;
                     }
-                    if (audioContext) {
-                        audioContext.close();
-                    }
+                    if (audioContext) audioContext.close();
                     
                     document.getElementById('barre-volume').style.width = "0%";
                     document.getElementById('statut-container').style.display = 'none';
