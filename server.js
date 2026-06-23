@@ -5,14 +5,10 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, { 
-    cors: { origin: "*" }
-});
+const io = socketIo(server, { cors: { origin: "*" } });
 
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
-
-// Permet au serveur de lire le fichier HTML qui sera à côté
 app.use(express.static(path.join(__dirname)));
 
 let positionsJoueurs = {};
@@ -106,7 +102,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// Renvoie le fichier index.html proprement
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
