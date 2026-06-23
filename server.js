@@ -10,7 +10,6 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 let positionsJoueurs = {};
-const DISTANCE_MAX_ENTENDRE = 80; 
 
 app.post('/update-positions', (req, res) => {
     const { userId, username, x, y, z } = req.body;
@@ -74,7 +73,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Échange des candidats ICE essentiels pour passer outre les pare-feux des box internet
     socket.on('ice-candidate', (data) => {
         io.to("salon-vocal-global").emit('relais-ice', {
             emetteur: socket.userId,
@@ -159,6 +157,7 @@ app.get('/', (req, res) => {
                 let noeudsGainDistants = {}; 
 
                 const configurationPeer = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+                const DISTANCE_MAX = 80; // Correction de la variable en brute dure
 
                 async function lancerAudio() {
                     monId = document.getElementById('uid').value.trim();
@@ -254,7 +253,6 @@ app.get('/', (req, res) => {
 
                         const fluxDistant = event.streams[0];
                         
-                        // Création d'un élément audio HTML pour forcer le navigateur à décoder le son
                         const audioEl = document.createElement('audio');
                         audioEl.srcObject = fluxDistant;
                         audioEl.autoplay = true;
@@ -262,8 +260,6 @@ app.get('/', (req, res) => {
                         document.getElementById('audios-distants').appendChild(audioEl);
 
                         const ctx = audioContext;
-                        
-                        // Forcer l'activation de l'AudioContext si le navigateur l'a mis en pause
                         if (ctx.state === 'suspended') {
                             ctx.resume();
                         }
@@ -288,7 +284,7 @@ app.get('/', (req, res) => {
                     }
                 }
 
-                async function calcularDistancesAudio() {
+                async function calculerDistancesAudio() {
                     if (!monId || !audioContext) return;
 
                     try {
@@ -311,8 +307,8 @@ app.get('/', (req, res) => {
                                 const dz = maPos.z - posAutre.z;
                                 const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-                                if (distance <= ${DISTANCE_MAX_ENTENDRE}) {
-                                    let volumeCalculé = 1 - (distance / ${DISTANCE_MAX_ENTENDRE});
+                                if (distance <= DISTANCE_MAX) {
+                                    let volumeCalculé = 1 - (distance / DISTANCE_MAX);
                                     noeudsGainDistants[idDistant].gain.setTargetAtTime(volumeCalculé, audioContext.currentTime, 0.1);
                                 } else {
                                     noeudsGainDistants[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
