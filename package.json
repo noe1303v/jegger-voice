@@ -1,13 +1,13 @@
 {
   "name": "jegger-city-voice",
   "version": "1.0.0",
-  "description": "Systeme de chat vocal pour Roblox",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "node-fetch": "^2.7.0"
   }
 }
