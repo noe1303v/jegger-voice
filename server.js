@@ -13,29 +13,29 @@ app.use(express.static(path.join(__dirname)));
 
 let positionsJoueurs = {};
 
-// C'est ici que Roblox envoie sa position et demande l'état des autres
+// Route pour Roblox
 app.post('/update-positions', (req, res) => {
     const { userId, username, x, y, z } = req.body;
+    if (!userId) return res.status(400).send();
+    
     const idString = userId.toString();
 
-    if (positionsJoueurs[idString]) {
-        positionsJoueurs[idString].x = parseFloat(x);
-        positionsJoueurs[idString].y = parseFloat(y);
-        positionsJoueurs[idString].z = parseFloat(z);
-        positionsJoueurs[idString].robloxActive = true;
-    } else {
+    if (!positionsJoueurs[idString]) {
         positionsJoueurs[idString] = {
             username: username,
-            x: parseFloat(x), y: parseFloat(y), z: parseFloat(z),
+            x: 0, y: 0, z: 0,
             vocalActive: false,
             isMuted: false,
-            robloxActive: true,
-            lastUpdate: Date.now()
+            robloxActive: true
         };
     }
+
+    positionsJoueurs[idString].x = parseFloat(x);
+    positionsJoueurs[idString].y = parseFloat(y);
+    positionsJoueurs[idString].z = parseFloat(z);
+    positionsJoueurs[idString].robloxActive = true;
     positionsJoueurs[idString].lastUpdate = Date.now();
 
-    // On renvoie TOUT le tableau pour que Roblox puisse lire l'état "vocalActive" de tout le monde
     res.json({ positions: positionsJoueurs });
 });
 
@@ -43,7 +43,6 @@ io.on('connection', (socket) => {
     socket.on('join-voice', (userId) => {
         const idString = userId.toString();
         socket.userId = idString;
-        
         if (!positionsJoueurs[idString]) {
             positionsJoueurs[idString] = { vocalActive: true, isMuted: false };
         } else {
@@ -52,14 +51,22 @@ io.on('connection', (socket) => {
         socket.join("salon-global");
     });
 
+    socket.on('toggle-mute', (data) => {
+        if (positionsJoueurs[data.userId]) {
+            positionsJoueurs[data.userId].isMuted = data.mute;
+        }
+    });
+
     socket.on('flux-audio-brut', (buffer) => {
         socket.to("salon-global").emit('stream-audio-serveur', { emetteur: socket.userId, buffer });
     });
 
     socket.on('disconnect', () => {
-        if (positionsJoueurs[socket.userId]) positionsJoueurs[socket.userId].vocalActive = false;
+        if (socket.userId && positionsJoueurs[socket.userId]) {
+            positionsJoueurs[socket.userId].vocalActive = false;
+        }
     });
 });
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-server.listen(PORT, () => console.log(`Serveur actif`));
+server.listen(PORT, () => console.log(`Serveur prêt sur le port ${PORT}`));
