@@ -2,70 +2,50 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Jegger City - Chat Vocal</title>
+    <title>Panel Vocal</title>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #1a1a1a; color: white; padding-top: 50px; }
-        .box { background: #2a2a2a; padding: 30px; display: inline-block; border-radius: 10px; }
-        input { padding: 10px; width: 200px; text-align: center; }
-        button { padding: 10px 20px; background: #00a2ff; border: none; color: white; cursor: pointer; }
-        #barre-volume { width: 0%; height: 10px; background: #00ff64; margin-top: 10px; }
+        body { font-family: sans-serif; background: #0b1120; color: white; margin: 0; padding: 20px; display: flex; gap: 20px; }
+        .card { background: #1e293b; padding: 20px; border-radius: 12px; }
+        .sidebar { width: 300px; }
+        .main { flex-grow: 1; }
+        button { width: 100%; padding: 12px; margin-bottom: 10px; border: none; border-radius: 8px; cursor: pointer; color: white; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; border-bottom: 1px solid #334155; text-align: left; }
     </style>
 </head>
 <body>
-    <div class="box">
-        <div id="formulaire">
-            <input type="text" id="uid" placeholder="ID Roblox"><br><br>
-            <button onclick="lancerAudio()">Lancer la Connexion</button>
-        </div>
-        <div id="statut-container" style="display: none;">
-            <p id="statut">🔴 Connecté</p>
-            <div id="barre-volume"></div><br>
-            <button id="btn-mute" onclick="toggleMute()">Muter</button>
-            <button onclick="window.location.reload()">Déconnexion</button>
-        </div>
-    </div>
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const socket = io();
-        let monStream, audioContext, estMute = false, monId = null;
 
-        async function lancerAudio() {
-            monId = document.getElementById('uid').value.trim();
-            if(!monId) return;
-            
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            monStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            
-            socket.emit('join-voice', monId);
-            document.getElementById('formulaire').style.display = 'none';
-            document.getElementById('statut-container').style.display = 'block';
+<div class="card sidebar">
+    <h3>Connexion</h3>
+    <button style="background: #22c55e;" onclick="alert('Lien OAuth Roblox ici')">Se connecter avec Roblox</button>
+    <button style="background: #3b82f6;" id="btn-vocal" onclick="lancerAudio()">Se connecter au vocal</button>
+</div>
 
-            const source = audioContext.createMediaStreamSource(monStream);
-            const processor = audioContext.createScriptProcessor(4096, 1, 1);
-            source.connect(processor);
-            processor.connect(audioContext.destination);
+<div class="card main">
+    <h3>Joueurs connectés</h3>
+    <table>
+        <thead><tr><th>Joueur</th><th>Status</th></tr></thead>
+        <tbody id="player-body"></tbody>
+    </table>
+</div>
 
-            processor.onaudioprocess = (e) => {
-                if (!estMute) socket.emit('flux-audio-brut', e.inputBuffer.getChannelData(0).buffer);
-            };
+<script src="/socket.io/socket.io.js"></script>
+<script>
+    const socket = io();
+    function lancerAudio() {
+        const id = prompt("Entre ton ID");
+        socket.emit('join-voice', id);
+    }
+
+    socket.on('update-list', (joueurs) => {
+        const body = document.getElementById('player-body');
+        body.innerHTML = '';
+        for(let id in joueurs) {
+            if(joueurs[id].vocalActive) {
+                body.innerHTML += `<tr><td>${joueurs[id].username}</td><td>${joueurs[id].isMuted ? 'Mute' : 'Actif'}</td></tr>`;
+            }
         }
-
-        function toggleMute() {
-            estMute = !estMute;
-            socket.emit('toggle-mute', { userId: monId, mute: estMute });
-            document.getElementById('btn-mute').innerText = estMute ? "Démuter" : "Muter";
-            document.getElementById('statut').innerText = estMute ? "⏸️ Mute" : "🔴 Connecté";
-        }
-
-        socket.on('stream-audio-serveur', (data) => {
-            if (estMute) return;
-            const buffer = audioContext.createBuffer(1, data.buffer.byteLength / 4, audioContext.sampleRate);
-            buffer.getChannelData(0).set(new Float32Array(data.buffer));
-            const source = audioContext.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioContext.destination);
-            source.start();
-        });
-    </script>
+    });
+</script>
 </body>
 </html>
