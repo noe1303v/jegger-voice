@@ -11,9 +11,7 @@
             background: #1a1a1a;
             color: white;
         }
-        h1 {
-            color: #00a2ff;
-        }
+        h1 { color: #00a2ff; }
         .box {
             background: #2a2a2a;
             padding: 30px;
@@ -82,9 +80,14 @@
     <p style="font-size: 18px; margin-bottom: 30px;">Active ton micro de proximité pour le serveur de jeu.</p>
     
     <div class="box">
-        <div id="formulaire">
+        <div id="etape-id">
             <input type="text" id="uid" placeholder="Entre ton ID Roblox"><br>
-            <button onclick="lancerAudio()">Lancer la Connexion</button>
+            <button onclick="demanderMicro()">1. Autoriser le Microphone</button>
+        </div>
+
+        <div id="etape-hautparleur" style="display: none;">
+            <p style="color: #ff9d00; font-weight: bold; margin-bottom: 20px;">Micro autorisé ! Cliquez ci-dessous pour débloquer les haut-parleurs.</p>
+            <button onclick="activerHautParleur()" style="background: #00ff64; color: #1a1a1a; font-size: 18px; padding: 15px 30px;">2. ACTIVER LE SON (HAUT-PARLEUR)</button>
         </div>
         
         <div id="statut-container" style="display: none;">
@@ -133,32 +136,45 @@
         };
         const DISTANCE_MAX = 80;
 
-        async function lancerAudio() {
+        // ÉTAPE 1 : Demande l'accès au micro
+        async function demanderMicro() {
             monId = document.getElementById('uid').value.trim();
             if(!monId) return alert("Erreur : Entre ton ID Roblox !");
             
             try {
                 monStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 
+                // On passe à l'étape du haut-parleur
+                document.getElementById('etape-id').style.display = 'none';
+                document.getElementById('etape-hautparleur').style.display = 'block';
+            } catch(err) {
+                alert("Erreur micro : Tu dois autoriser le micro en haut à gauche de ton navigateur.");
+                console.error(err);
+            }
+        }
+
+        // ÉTAPE 2 : Force le navigateur à ouvrir la sortie son (Haut-parleur)
+        async function activerHautParleur() {
+            try {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 
                 if (audioContext.state === 'suspended') {
                     await audioContext.resume();
                 }
 
-                // FORCE L'ICÔNE DU HAUT-PARLEUR : On joue une fréquence inaudible (1 Hz) en continu à un volume quasi-nul
-                // Le navigateur voit qu'une piste audio "joue" quelque chose sur les haut-parleurs, l'icône apparaît directement !
+                // Générateur de fréquence inaudible (1 Hz) pour forcer l'icône du haut-parleur sur l'onglet
                 oscillateurInaudible = audioContext.createOscillator();
                 const gainInaudible = audioContext.createGain();
                 oscillateurInaudible.frequency.setValueAtTime(1, audioContext.currentTime); 
-                gainInaudible.gain.setValueAtTime(0.0001, audioContext.currentTime); 
+                gainInaudible.gain.setValueAtTime(0.001, audioContext.currentTime); 
                 oscillateurInaudible.connect(gainInaudible);
                 gainInaudible.connect(audioContext.destination);
                 oscillateurInaudible.start();
 
+                // Connexion au serveur de chat vocal
                 socket.emit('join-voice', monId);
                 
-                document.getElementById('formulaire').style.display = 'none';
+                document.getElementById('etape-hautparleur').style.style.display = 'none';
                 document.getElementById('statut-container').style.display = 'block';
                 
                 analyser = audioContext.createAnalyser();
@@ -191,9 +207,8 @@
 
                 setInterval(calculerDistancesAudio, 500);
 
-            } catch(err) {
-                alert("Erreur micro : Vérifie les autorisations.");
-                console.error(err);
+            } catch(e) {
+                console.error(e);
             }
         }
 
@@ -359,7 +374,7 @@
             
             document.getElementById('barre-volume').style.width = "0%";
             document.getElementById('statut-container').style.display = 'none';
-            document.getElementById('formulaire').style.display = 'block';
+            document.getElementById('etape-id').style.display = 'block';
         }
     </script>
 </body>
