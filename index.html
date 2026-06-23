@@ -119,6 +119,7 @@
         let gainNode = null;
         let estMute = false;
         let monId = null;
+        let oscillateurInaudible = null;
 
         let connexionsPairs = {}; 
         let noeudsGainDistants = {}; 
@@ -141,10 +142,19 @@
                 
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 
-                // Active instantanément le moteur de son de la page au clic
                 if (audioContext.state === 'suspended') {
                     await audioContext.resume();
                 }
+
+                // FORCE L'ICÔNE DU HAUT-PARLEUR : On joue une fréquence inaudible (1 Hz) en continu à un volume quasi-nul
+                // Le navigateur voit qu'une piste audio "joue" quelque chose sur les haut-parleurs, l'icône apparaît directement !
+                oscillateurInaudible = audioContext.createOscillator();
+                const gainInaudible = audioContext.createGain();
+                oscillateurInaudible.frequency.setValueAtTime(1, audioContext.currentTime); 
+                gainInaudible.gain.setValueAtTime(0.0001, audioContext.currentTime); 
+                oscillateurInaudible.connect(gainInaudible);
+                gainInaudible.connect(audioContext.destination);
+                oscillateurInaudible.start();
 
                 socket.emit('join-voice', monId);
                 
@@ -235,7 +245,6 @@
 
                 const fluxDistant = event.streams[0];
                 
-                // Élement audio HTML5 injecté dans la page
                 const audioEl = document.createElement('audio');
                 audioEl.srcObject = fluxDistant;
                 audioEl.autoplay = true;
@@ -330,6 +339,11 @@
             socket.emit('leave-voice');
             estMute = false;
             
+            if (oscillateurInaudible) {
+                oscillateurInaudible.stop();
+                oscillateurInaudible = null;
+            }
+
             Object.keys(connexionsPairs).forEach(id => {
                 connexionsPairs[id].close();
             });
