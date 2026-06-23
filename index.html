@@ -11,9 +11,7 @@
             background: #1a1a1a;
             color: white;
         }
-        h1 {
-            color: #00a2ff;
-        }
+        h1 { color: #00a2ff; }
         .box {
             background: #2a2a2a;
             padding: 30px;
@@ -123,7 +121,6 @@
         let oscillateurInaudible = null;
         
         let volumesJoueurs = {}; 
-
         const DISTANCE_MAX = 80;
 
         async function lancerAudio() {
@@ -136,7 +133,7 @@
                     await audioContext.resume();
                 }
 
-                // Éveille le canal haut-parleur
+                // Réveil du haut-parleur
                 oscillateurInaudible = audioContext.createOscillator();
                 const gainInaudible = audioContext.createGain();
                 oscillateurInaudible.frequency.setValueAtTime(1, audioContext.currentTime); 
@@ -146,6 +143,8 @@
                 oscillateurInaudible.start();
 
                 monStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                // On prévient le serveur web qu'on rejoint la vocal
                 socket.emit('join-voice', monId);
                 
                 document.getElementById('formulaire').style.display = 'none';
@@ -181,7 +180,7 @@
                 }
                 verifierVolume();
 
-                // Relance la boucle de calcul des distances par rapport à Roblox
+                // On lance la boucle de synchronisation de distance
                 setInterval(calculerDistancesAudio, 500);
 
             } catch(err) {
@@ -193,17 +192,16 @@
         socket.on('stream-audio-serveur', (data) => {
             if (!audioContext || estMute) return;
 
-            const idDistant = data.emetteur;
+            const idDistant = data.emetteur.toString();
             const audioBuffer = audioContext.createBuffer(1, data.buffer.byteLength / 4, audioContext.sampleRate);
             audioBuffer.getChannelData(0).set(new Float32Array(data.buffer));
 
             const source = audioContext.createBufferSource();
             source.buffer = audioBuffer;
 
-            // On crée un nœud de gain dédié pour ce joueur s'il n'existe pas encore
             if (!volumesJoueurs[idDistant]) {
                 volumesJoueurs[idDistant] = audioContext.createGain();
-                volumesJoueurs[idDistant].gain.setValueAtTime(0, audioContext.currentTime); // 0 par défaut avant calcul de distance
+                volumesJoueurs[idDistant].gain.setValueAtTime(0, audioContext.currentTime); 
                 volumesJoueurs[idDistant].connect(audioContext.destination);
             }
 
@@ -211,11 +209,11 @@
             source.start();
         });
 
-        // RECONGURATION DU CALCUL DES DISTANCES ROBLOX
         async function calculerDistancesAudio() {
             if (!monId || !audioContext) return;
 
             try {
+                // IMPORTANT : On envoie le vrai monId actuel à la route POST de Roblox
                 const response = await fetch('/update-positions', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
