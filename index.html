@@ -121,6 +121,10 @@
         let monId = null;
         let processor = null;
         let oscillateurInaudible = null;
+        
+        let volumesJoueurs = {}; 
+
+        const DISTANCE_MAX = 80;
 
         async function lancerAudio() {
             monId = document.getElementById('uid').value.trim();
@@ -132,7 +136,7 @@
                     await audioContext.resume();
                 }
 
-                // Maintien du canal haut-parleur ouvert avec une fréquence inaudible
+                // Éveille le canal haut-parleur
                 oscillateurInaudible = audioContext.createOscillator();
                 const gainInaudible = audioContext.createGain();
                 oscillateurInaudible.frequency.setValueAtTime(1, audioContext.currentTime); 
@@ -165,13 +169,6 @@
                 const bufferLength = analyser.frequencyBinCount;
                 const dataArray = new Uint8Array(bufferLength);
                 
-                const slider = document.getElementById('volume-slider');
-                slider.oninput = function() {
-                    if(!estMute && audioContext) {
-                        // Géré via le flux global
-                    }
-                };
-
                 function verifierVolume() {
                     if (!monStream || !analyser) return;
                     analyser.getByteFrequencyData(dataArray);
@@ -184,6 +181,9 @@
                 }
                 verifierVolume();
 
+                // Relance la boucle de calcul des distances par rapport à Roblox
+                setInterval(calculerDistancesAudio, 500);
+
             } catch(err) {
                 alert("Erreur micro : Vérifie les autorisations.");
                 console.error(err);
@@ -193,14 +193,62 @@
         socket.on('stream-audio-serveur', (data) => {
             if (!audioContext || estMute) return;
 
+            const idDistant = data.emetteur;
             const audioBuffer = audioContext.createBuffer(1, data.buffer.byteLength / 4, audioContext.sampleRate);
             audioBuffer.getChannelData(0).set(new Float32Array(data.buffer));
 
             const source = audioContext.createBufferSource();
             source.buffer = audioBuffer;
-            source.connect(audioContext.destination);
+
+            // On crée un nœud de gain dédié pour ce joueur s'il n'existe pas encore
+            if (!volumesJoueurs[idDistant]) {
+                volumesJoueurs[idDistant] = audioContext.createGain();
+                volumesJoueurs[idDistant].gain.setValueAtTime(0, audioContext.currentTime); // 0 par défaut avant calcul de distance
+                volumesJoueurs[idDistant].connect(audioContext.destination);
+            }
+
+            source.connect(volumesJoueurs[idDistant]);
             source.start();
         });
+
+        // RECONGURATION DU CALCUL DES DISTANCES ROBLOX
+        async function calculerDistancesAudio() {
+            if (!monId || !audioContext) return;
+
+            try {
+                const response = await fetch('/update-positions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: monId, x: 0, y: 0, z: 0 })
+                });
+                const data = await response.json();
+                if (!data.positions || !data.positions[monId]) return;
+                
+                const maPos = data.positions[monId];
+
+                Object.keys(volumesJoueurs).forEach(idDistant => {
+                    const posAutre = data.positions[idDistant];
+                    
+                    if (posAutre && posAutre.robloxActive) {
+                        const dx = maPos.x - posAutre.x;
+                        const dy = maPos.y - posAutre.y;
+                        const dz = maPos.z - posAutre.z;
+                        const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                        if (distance <= DISTANCE_MAX) {
+                            let volumeCalculé = 1 - (distance / DISTANCE_MAX);
+                            const userSlider = parseFloat(document.getElementById('volume-slider').value);
+                            volumesJoueurs[idDistant].gain.setTargetAtTime(volumeCalculé * userSlider, audioContext.currentTime, 0.1);
+                        } else {
+                            volumesJoueurs[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
+                        }
+                    } else {
+                        volumesJoueurs[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
+                    }
+                });
+
+            } catch (e) {}
+        }
 
         function toggleMute() {
             estMute = !estMute;
@@ -231,6 +279,8 @@
                 processor.disconnect();
                 processor = null;
             }
+
+            volumesJoueurs = {};
 
             if (monStream) {
                 monStream.getTracks().forEach(track => track.stop());
