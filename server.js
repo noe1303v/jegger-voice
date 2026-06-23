@@ -173,8 +173,19 @@ app.get('/', (req, res) => {
                     try {
                         monStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                         
-                        // Initialisation et déblocage immédiat de l'AudioContext dès le clic utilisateur
+                        // 1. Initialisation classique du contexte audio
                         audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        
+                        // 2. L'ASTUCE : On force le navigateur à émettre un son inaudible immédiatement 
+                        // pour valider la sortie haut-parleur dès le clic sur le bouton.
+                        const osc = audioContext.createOscillator();
+                        const gainDeclencheur = audioContext.createGain();
+                        gainDeclencheur.gain.setValueAtTime(0.001, audioContext.currentTime); // Quasi-silencieux
+                        osc.connect(gainDeclencheur);
+                        gainDeclencheur.connect(audioContext.destination);
+                        osc.start();
+                        osc.stop(audioContext.currentTime + 0.1); // S'arrête après 100ms
+
                         if (audioContext.state === 'suspended') {
                             await audioContext.resume();
                         }
@@ -275,7 +286,6 @@ app.get('/', (req, res) => {
                         audioEl.style.display = "none";
                         document.getElementById('audios-distants').appendChild(audioEl);
 
-                        // Récupération sécurisée du contexte initié au démarrage
                         const ctx = audioContext;
                         if (ctx.state === 'suspended') {
                             ctx.resume();
