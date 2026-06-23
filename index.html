@@ -4,292 +4,68 @@
     <meta charset="UTF-8">
     <title>Jegger City - Chat Vocal</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            padding-top: 60px;
-            background: #1a1a1a;
-            color: white;
-        }
-        h1 { color: #00a2ff; }
-        .box {
-            background: #2a2a2a;
-            padding: 30px;
-            display: inline-block;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-            min-width: 320px;
-        }
-        input {
-            padding: 12px;
-            font-size: 16px;
-            border-radius: 5px;
-            border: none;
-            width: 250px;
-            text-align: center;
-            margin-bottom: 20px;
-            background: #fff;
-            color: #000;
-        }
-        button {
-            padding: 12px 25px;
-            font-size: 16px;
-            background: #00a2ff;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        .barre-conteneur {
-            width: 250px;
-            height: 15px;
-            background: #444;
-            border-radius: 10px;
-            margin: 0 auto 20px auto;
-            overflow: hidden;
-        }
-        #barre-volume {
-            width: 0%;
-            height: 100%;
-            background: #00ff64;
-            transition: width 0.05s ease;
-        }
-        .flex-actions {
-            display: flex;
-            gap: 10px;
-            justify-content: center;
-        }
-        .btn-action {
-            padding: 10px 15px;
-            font-size: 14px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            width: 110px;
-        }
-        #btn-mute { background: #ff9d00; color: white; }
-        #btn-deco { background: #ff4141; color: white; }
+        body { font-family: sans-serif; text-align: center; background: #1a1a1a; color: white; padding-top: 50px; }
+        .box { background: #2a2a2a; padding: 30px; display: inline-block; border-radius: 10px; }
+        input { padding: 10px; width: 200px; text-align: center; }
+        button { padding: 10px 20px; background: #00a2ff; border: none; color: white; cursor: pointer; }
+        #barre-volume { width: 0%; height: 10px; background: #00ff64; margin-top: 10px; }
     </style>
 </head>
 <body>
-
-    <h1>Jegger City Voice Connect</h1>
-    <p style="font-size: 18px; margin-bottom: 30px;">Active ton micro de proximité pour le serveur de jeu.</p>
-    
     <div class="box">
         <div id="formulaire">
-            <input type="text" id="uid" placeholder="Entre ton ID Roblox"><br>
+            <input type="text" id="uid" placeholder="ID Roblox"><br><br>
             <button onclick="lancerAudio()">Lancer la Connexion</button>
         </div>
-        
         <div id="statut-container" style="display: none;">
-            <p id="statut" style="color: #00ff64; font-size: 18px; font-weight: bold; margin-bottom: 25px;">🔴 Connexion active ! Laisse cet onglet ouvert.</p>
-            
-            <div class="barre-conteneur">
-                <div id="barre-volume"></div>
-            </div>
-
-            <div style="margin-bottom: 25px;">
-                <label for="volume-slider" style="font-size: 14px; color: #ccc; display: block; margin-bottom: 5px;">Volume du micro :</label>
-                <input type="range" id="volume-slider" min="0" max="2" step="0.1" value="1" style="width: 200px; cursor: pointer;">
-            </div>
-
-            <div class="flex-actions">
-                <button id="btn-mute" class="btn-action" onclick="toggleMute()">Muter</button>
-                <button id="btn-deco" class="btn-action" onclick="couperConnexion()">Déconnexion</button>
-            </div>
+            <p id="statut">🔴 Connecté</p>
+            <div id="barre-volume"></div><br>
+            <button id="btn-mute" onclick="toggleMute()">Muter</button>
+            <button onclick="window.location.reload()">Déconnexion</button>
         </div>
     </div>
-
-    <div id="audios-distants" style="display: none;"></div>
-    
-    <p style="color: #888; margin-top: 40px; font-size: 14px;">Laisse cet onglet ouvert en arrière-plan pendant que tu joues.</p>
-
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = io({ transport: ['websocket'] });
-        let monStream = null;
-        let audioContext = null;
-        let analyser = null;
-        let gainNode = null;
-        let estMute = false;
-        let monId = null;
-        let processor = null;
-        let oscillateurInaudible = null;
-        
-        let volumesJoueurs = {}; 
-        const DISTANCE_MAX = 80;
+        const socket = io();
+        let monStream, audioContext, estMute = false, monId = null;
 
         async function lancerAudio() {
             monId = document.getElementById('uid').value.trim();
-            if(!monId) return alert("Erreur : Entre ton ID Roblox !");
+            if(!monId) return;
             
-            try {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                if (audioContext.state === 'suspended') {
-                    await audioContext.resume();
-                }
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            monStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            socket.emit('join-voice', monId);
+            document.getElementById('formulaire').style.display = 'none';
+            document.getElementById('statut-container').style.display = 'block';
 
-                // Réveil du haut-parleur
-                oscillateurInaudible = audioContext.createOscillator();
-                const gainInaudible = audioContext.createGain();
-                oscillateurInaudible.frequency.setValueAtTime(1, audioContext.currentTime); 
-                gainInaudible.gain.setValueAtTime(0.001, audioContext.currentTime); 
-                oscillateurInaudible.connect(gainInaudible);
-                gainInaudible.connect(audioContext.destination);
-                oscillateurInaudible.start();
+            const source = audioContext.createMediaStreamSource(monStream);
+            const processor = audioContext.createScriptProcessor(4096, 1, 1);
+            source.connect(processor);
+            processor.connect(audioContext.destination);
 
-                monStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                
-                // On prévient le serveur web qu'on rejoint la vocal
-                socket.emit('join-voice', monId);
-                
-                document.getElementById('formulaire').style.display = 'none';
-                document.getElementById('statut-container').style.display = 'block';
-                
-                const source = audioContext.createMediaStreamSource(monStream);
-                
-                processor = audioContext.createScriptProcessor(4096, 1, 1);
-                source.connect(processor);
-                processor.connect(audioContext.destination);
-
-                processor.onaudioprocess = function(e) {
-                    if (estMute) return;
-                    const inputData = e.inputBuffer.getChannelData(0);
-                    socket.emit('flux-audio-brut', inputData.buffer);
-                };
-
-                analyser = audioContext.createAnalyser();
-                source.connect(analyser);
-                analyser.fftSize = 32;
-                const bufferLength = analyser.frequencyBinCount;
-                const dataArray = new Uint8Array(bufferLength);
-                
-                function verifierVolume() {
-                    if (!monStream || !analyser) return;
-                    analyser.getByteFrequencyData(dataArray);
-                    let total = 0;
-                    for (let i = 0; i < bufferLength; i++) total += dataArray[i];
-                    let volume = total / bufferLength;
-                    let pourcentage = Math.min(100, Math.floor(volume * 4));
-                    document.getElementById('barre-volume').style.width = estMute ? "0%" : pourcentage + "%";
-                    requestAnimationFrame(verifierVolume);
-                }
-                verifierVolume();
-
-                // On lance la boucle de synchronisation de distance
-                setInterval(calculerDistancesAudio, 500);
-
-            } catch(err) {
-                alert("Erreur micro : Vérifie les autorisations.");
-                console.error(err);
-            }
-        }
-
-        socket.on('stream-audio-serveur', (data) => {
-            if (!audioContext || estMute) return;
-
-            const idDistant = data.emetteur.toString();
-            const audioBuffer = audioContext.createBuffer(1, data.buffer.byteLength / 4, audioContext.sampleRate);
-            audioBuffer.getChannelData(0).set(new Float32Array(data.buffer));
-
-            const source = audioContext.createBufferSource();
-            source.buffer = audioBuffer;
-
-            if (!volumesJoueurs[idDistant]) {
-                volumesJoueurs[idDistant] = audioContext.createGain();
-                volumesJoueurs[idDistant].gain.setValueAtTime(0, audioContext.currentTime); 
-                volumesJoueurs[idDistant].connect(audioContext.destination);
-            }
-
-            source.connect(volumesJoueurs[idDistant]);
-            source.start();
-        });
-
-        async function calculerDistancesAudio() {
-            if (!monId || !audioContext) return;
-
-            try {
-                // IMPORTANT : On envoie le vrai monId actuel à la route POST de Roblox
-                const response = await fetch('/update-positions', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: monId, x: 0, y: 0, z: 0 })
-                });
-                const data = await response.json();
-                if (!data.positions || !data.positions[monId]) return;
-                
-                const maPos = data.positions[monId];
-
-                Object.keys(volumesJoueurs).forEach(idDistant => {
-                    const posAutre = data.positions[idDistant];
-                    
-                    if (posAutre && posAutre.robloxActive) {
-                        const dx = maPos.x - posAutre.x;
-                        const dy = maPos.y - posAutre.y;
-                        const dz = maPos.z - posAutre.z;
-                        const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
-
-                        if (distance <= DISTANCE_MAX) {
-                            let volumeCalculé = 1 - (distance / DISTANCE_MAX);
-                            const userSlider = parseFloat(document.getElementById('volume-slider').value);
-                            volumesJoueurs[idDistant].gain.setTargetAtTime(volumeCalculé * userSlider, audioContext.currentTime, 0.1);
-                        } else {
-                            volumesJoueurs[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
-                        }
-                    } else {
-                        volumesJoueurs[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
-                    }
-                });
-
-            } catch (e) {}
+            processor.onaudioprocess = (e) => {
+                if (!estMute) socket.emit('flux-audio-brut', e.inputBuffer.getChannelData(0).buffer);
+            };
         }
 
         function toggleMute() {
             estMute = !estMute;
-            const btn = document.getElementById('btn-mute');
-            if(estMute) {
-                btn.innerText = "Démuter";
-                btn.style.background = "#00ff64";
-                document.getElementById('statut').innerText = "⏸️ Micro coupé (Mute)";
-                document.getElementById('statut').style.color = "#ff4141";
-            } else {
-                btn.innerText = "Muter";
-                btn.style.background = "#ff9d00";
-                document.getElementById('statut').innerText = "🔴 Connexion active ! Laisse cet onglet ouvert.";
-                document.getElementById('statut').style.color = "#00ff64";
-            }
+            socket.emit('toggle-mute', { userId: monId, mute: estMute });
+            document.getElementById('btn-mute').innerText = estMute ? "Démuter" : "Muter";
+            document.getElementById('statut').innerText = estMute ? "⏸️ Mute" : "🔴 Connecté";
         }
 
-        function couperConnexion() {
-            socket.emit('leave-voice');
-            estMute = false;
-            
-            if (oscillateurInaudible) {
-                oscillateurInaudible.stop();
-                oscillateurInaudible = null;
-            }
-
-            if (processor) {
-                processor.disconnect();
-                processor = null;
-            }
-
-            volumesJoueurs = {};
-
-            if (monStream) {
-                monStream.getTracks().forEach(track => track.stop());
-                monStream = null;
-            }
-            if (audioContext) audioContext.close();
-            
-            document.getElementById('barre-volume').style.width = "0%";
-            document.getElementById('statut-container').style.display = 'none';
-            document.getElementById('formulaire').style.display = 'block';
-        }
+        socket.on('stream-audio-serveur', (data) => {
+            if (estMute) return;
+            const buffer = audioContext.createBuffer(1, data.buffer.byteLength / 4, audioContext.sampleRate);
+            buffer.getChannelData(0).set(new Float32Array(data.buffer));
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+            source.start();
+        });
     </script>
 </body>
 </html>
