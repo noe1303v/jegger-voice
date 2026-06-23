@@ -2,49 +2,54 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Panel Vocal</title>
+    <title>Jegger City - Panel</title>
     <style>
-        body { font-family: sans-serif; background: #0b1120; color: white; margin: 0; padding: 20px; display: flex; gap: 20px; }
-        .card { background: #1e293b; padding: 20px; border-radius: 12px; }
+        body { background: #0f172a; color: white; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; }
+        .wrapper { display: flex; gap: 20px; max-width: 1200px; margin: auto; }
+        .card { background: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; }
         .sidebar { width: 300px; }
         .main { flex-grow: 1; }
-        button { width: 100%; padding: 12px; margin-bottom: 10px; border: none; border-radius: 8px; cursor: pointer; color: white; font-weight: bold; }
+        .btn { width: 100%; padding: 12px; border-radius: 8px; border: none; color: white; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
         table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; border-bottom: 1px solid #334155; text-align: left; }
+        th { color: #64748b; text-align: left; padding: 10px; }
+        td { padding: 10px; border-bottom: 1px solid #334155; }
     </style>
 </head>
 <body>
-
-<div class="card sidebar">
-    <h3>Connexion</h3>
-    <button style="background: #22c55e;" onclick="alert('Lien OAuth Roblox ici')">Se connecter avec Roblox</button>
-    <button style="background: #3b82f6;" id="btn-vocal" onclick="lancerAudio()">Se connecter au vocal</button>
-</div>
-
-<div class="card main">
-    <h3>Joueurs connectés</h3>
-    <table>
-        <thead><tr><th>Joueur</th><th>Status</th></tr></thead>
-        <tbody id="player-body"></tbody>
-    </table>
+<div class="wrapper">
+    <div class="card sidebar">
+        <h3>Connexion</h3>
+        <button class="btn" style="background:#10b981" onclick="window.location.href='/auth/roblox'">Se connecter avec Roblox</button>
+        <button class="btn" style="background:#3b82f6" id="btn-vocal" onclick="connexionVocal()">Se connecter au vocal</button>
+    </div>
+    <div class="card main">
+        <h3>Joueurs connectés</h3>
+        <table>
+            <thead><tr><th>Joueur</th><th>Status</th></tr></thead>
+            <tbody id="player-body"></tbody>
+        </table>
+    </div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
     const socket = io();
-    function lancerAudio() {
-        const id = prompt("Entre ton ID");
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('id');
+
+    function connexionVocal() {
+        if(!id) return alert("Authentifie-toi d'abord avec Roblox !");
         socket.emit('join-voice', id);
+        document.getElementById('btn-vocal').innerText = "Vocal Connecté";
+        document.getElementById('btn-vocal').style.background = "#10b981";
     }
 
     socket.on('update-list', (joueurs) => {
         const body = document.getElementById('player-body');
         body.innerHTML = '';
-        for(let id in joueurs) {
-            if(joueurs[id].vocalActive) {
-                body.innerHTML += `<tr><td>${joueurs[id].username}</td><td>${joueurs[id].isMuted ? 'Mute' : 'Actif'}</td></tr>`;
-            }
-        }
+        Object.values(joueurs).forEach(j => {
+            if(j.vocalActive) body.innerHTML += `<tr><td>${j.username || 'Joueur'}</td><td>🟢 Actif</td></tr>`;
+        });
     });
 </script>
 </body>
