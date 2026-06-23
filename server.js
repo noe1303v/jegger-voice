@@ -4,7 +4,11 @@ const socketIo = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, { cors: { origin: "*" } });
+// Configuration des paquets WebSocket pour transporter un flux audio lourd sans coupure
+const io = socketIo(server, { 
+    cors: { origin: "*" },
+    maxHttpBufferSize: 1e7 // 10 Mo pour éviter les saturations de flux
+});
 
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
@@ -61,23 +65,19 @@ io.on('connection', (socket) => {
         positionsJoueurs[idString].isMuted = false;
         positionsJoueurs[idString].lastUpdate = Date.now();
         
-        socket.to("salon-vocal-global").emit('joueur-rejoint', idString);
-        console.log(`[SERVEUR] Joueur ${idString} connecté au vocal.`);
+        console.log(`[SERVEUR] Joueur ${idString} diffuse son flux audio sur le serveur.`);
     });
 
-    socket.on('signal-audio', (data) => {
-        io.to("salon-vocal-global").emit('relais-signal', {
-            emetteur: socket.userId,
-            cible: data.cible,
-            signal: data.signal
-        });
-    });
+    // LE COEUR DU SYSTÈME : Le serveur reçoit le flux audio brut (comme une vidéo) et le retransmet
+    socket.on('flux-audio-brut', (donneesAudio) => {
+        if (!socket.userId) return;
+        
+        // On vérifie si le joueur n'est pas muté avant de diffuser son stream
+        if (positionsJoueurs[socket.userId] && positionsJoueurs[socket.userId].isMuted) return;
 
-    socket.on('ice-candidate', (data) => {
-        io.to("salon-vocal-global").emit('relais-ice', {
+        socket.to("salon-vocal-global").emit('stream-audio-serveur', {
             emetteur: socket.userId,
-            cible: data.cible,
-            candidate: data.candidate
+            buffer: donneesAudio // Données binaires du micro
         });
     });
 
@@ -90,7 +90,6 @@ io.on('connection', (socket) => {
     socket.on('leave-voice', () => {
         if (socket.userId && positionsJoueurs[socket.userId]) {
             positionsJoueurs[socket.userId].vocalActive = false;
-            positionsJoueurs[socket.userId].isMuted = false;
         }
         socket.leave("salon-vocal-global");
     });
@@ -108,11 +107,11 @@ app.get('/', (req, res) => {
         <html lang="fr">
         <head>
             <meta charset="UTF-8">
-            <title>Jegger City - Chat Vocal</title>
+            <title>Jegger City - Chat Vocal Live Stream</title>
         </head>
         <body style="font-family: Arial, sans-serif; text-align: center; padding-top: 60px; background: #1a1a1a; color: white;">
-            <h1 style="color: #00a2ff;">Jegger City Voice Connect</h1>
-            <p style="font-size: 18px; margin-bottom: 30px;">Active ton micro de proximité pour le serveur de jeu.</p>
+            <h1 style="color: #00a2ff;">Jegger City Voice Stream</h1>
+            <p style="font-size: 18px; margin-bottom: 30px;">Le son est diffusé en direct depuis le serveur web.</p>
             
             <div id="box-connexion" style="background: #2a2a2a; padding: 30px; display: inline-block; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); min-width: 320px;">
                 <div id="formulaire">
@@ -121,7 +120,7 @@ app.get('/', (req, res) => {
                 </div>
                 
                 <div id="statut-container" style="display: none;">
-                    <p id="statut" style="color: #00ff64; font-size: 18px; font-weight: bold; margin-bottom: 25px;">🔴 Connexion active ! Laisse cet onglet ouvert.</p>
+                    <p id="statut" style="color: #00ff64; font-size: 18px; font-weight: bold; margin-bottom: 25px;">🔴 Stream en direct connecté !</p>
                     
                     <div style="width: 250px; height: 15px; background: #444; border-radius: 10px; margin: 0 auto 20px auto; overflow: hidden;">
                         <div id="barre-volume" style="width: 0%; height: 100%; background: #00ff64; transition: width 0.05s ease;"></div>
@@ -138,8 +137,6 @@ app.get('/', (req, res) => {
                     </div>
                 </div>
             </div>
-
-            <div id="audios-distants" style="margin-top: 20px;"></div>
             
             <p style="color: #888; margin-top: 40px; font-size: 14px;">Laisse cet onglet ouvert en arrière-plan pendant que tu joues.</p>
 
@@ -152,22 +149,12 @@ app.get('/', (req, res) => {
                 let gainNode = null;
                 let estMute = false;
                 let monId = null;
+                let scriptProcessor = null;
 
-                let connexionsPairs = {}; 
-                let noeudsGainDistants = {}; 
-
-                // AJOUT DE SERVEURS TURN PUBLICS ET DE SECOURS POUR FORCER LE PASSAGE DES BOX INTERNET
-                const configurationPeer = { 
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun.services.mozilla.com' },
-                        { urls: 'stun:global.stun.twilio.com:3478' }
-                    ],
-                    iceTransportPolicy: 'all'
-                };
+                // File d'attente pour stocker et lire les morceaux de son reçus du serveur sans coupure
+                let morceauxAudioA_Lire = {}; 
                 const DISTANCE_MAX = 80;
+                let positionsServeur Cache = {};
 
                 async function lancerAudio() {
                     monId = document.getElementById('uid').value.trim();
@@ -178,15 +165,7 @@ app.get('/', (req, res) => {
                         
                         audioContext = new (window.AudioContext || window.webkitAudioContext)();
                         
-                        // Déclencheur sonore ultra-rapide pour déverrouiller définitivement l'onglet web
-                        const osc = audioContext.createOscillator();
-                        const gainDeclencheur = audioContext.createGain();
-                        gainDeclencheur.gain.setValueAtTime(0.001, audioContext.currentTime);
-                        osc.connect(gainDeclencheur);
-                        gainDeclencheur.connect(audioContext.destination);
-                        osc.start();
-                        osc.stop(audioContext.currentTime + 0.1);
-
+                        // Forcer l'activation du son de la page web immédiatement
                         if (audioContext.state === 'suspended') {
                             await audioContext.resume();
                         }
@@ -203,14 +182,21 @@ app.get('/', (req, res) => {
                         source.connect(gainNode);
                         gainNode.connect(analyser);
                         
+                        // Découpage du micro en petits morceaux binaires (comme un flux vidéo) pour l'envoyer au serveur
+                        scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+                        source.connect(scriptProcessor);
+                        scriptProcessor.connect(audioContext.destination);
+                        
+                        scriptProcessor.onaudioprocess = function(e) {
+                            if (estMute) return;
+                            const donneesEntree = e.inputBuffer.getChannelData(0);
+                            // Envoi direct au serveur web
+                            socket.emit('flux-audio-brut', donneesEntree);
+                        };
+
                         analyser.fftSize = 256;
                         const bufferLength = analyser.frequencyBinCount;
                         const dataArray = new Uint8Array(bufferLength);
-                        
-                        const slider = document.getElementById('volume-slider');
-                        slider.oninput = function() {
-                            if(!estMute && gainNode) gainNode.gain.value = this.value;
-                        };
 
                         function verifierVolume() {
                             if (!monStream || !analyser) return;
@@ -232,100 +218,47 @@ app.get('/', (req, res) => {
                     }
                 }
 
-                socket.on('joueur-rejoint', async (idDistant) => {
-                    if (idDistant === monId) return;
-                    creerLiaisonPeer(idDistant, true);
-                });
+                // LE SITE WEB REÇOIT LE SON DU SERVEUR (COMME UNE VIDÉO)
+                socket.on('stream-audio-serveur', (data) => {
+                    if (!audioContext || data.emetteur === monId) return;
 
-                socket.on('relais-signal', async (data) => {
-                    if (data.cible !== monId) return;
-                    
-                    if (!connexionsPairs[data.emetteur]) {
-                        creerLiaisonPeer(data.emetteur, false);
-                    }
-                    
-                    await connexionsPairs[data.emetteur].setRemoteDescription(new RTCSessionDescription(data.signal));
-                    if (data.signal.type === 'offer') {
-                        const answer = await connexionsPairs[data.emetteur].createAnswer();
-                        await connexionsPairs[data.emetteur].setLocalDescription(answer);
-                        socket.emit('signal-audio', { cible: data.emetteur, signal: answer });
-                    }
-                });
+                    const idDistant = data.emetteur;
+                    const donnéesBrutes = new Float32Array(data.buffer);
 
-                socket.on('relais-ice', async (data) => {
-                    if (data.cible !== monId) return;
-                    if (connexionsPairs[data.emetteur]) {
-                        try {
-                            await connexionsPairs[data.emetteur].addIceCandidate(new RTCIceCandidate(data.candidate));
-                        } catch(e) {}
-                    }
-                });
+                    // Calcul de la distance pour savoir si on doit jouer le morceau de son reçu
+                    let volumeCalculé = 0;
+                    const maPos = positionsServeurCache[monId];
+                    const posAutre = positionsServeurCache[idDistant];
 
-                function creerLiaisonPeer(idDistant, initierOffre) {
-                    const peer = new RTCPeerConnection(configurationPeer);
-                    connexionsPairs[idDistant] = peer;
+                    if (maPos && posAutre && posAutre.robloxActive) {
+                        const dx = maPos.x - posAutre.x;
+                        const dy = maPos.y - posAutre.y;
+                        const dz = maPos.z - posAutre.z;
+                        const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-                    if (monStream) {
-                        monStream.getTracks().forEach(track => peer.addTrack(track, monStream));
-                    }
-
-                    peer.onicecandidate = (event) => {
-                        if (event.candidate) {
-                            socket.emit('ice-candidate', { cible: idDistant, candidate: event.candidate });
+                        if (distance <= DISTANCE_MAX) {
+                            volumeCalculé = 1 - (distance / DISTANCE_MAX);
                         }
-                    };
-
-                    peer.ontrack = (event) => {
-                        if (noeudsGainDistants[idDistant]) return;
-
-                        const fluxDistant = event.streams[0];
-                        
-                        // DOUBLE SÉCURITÉ : On crée un élément HTML5 <audio> PHYSIQUE et VISIBLE (mais discret)
-                        // Les navigateurs refusent de lire les flux audio invisibles créés à la volée.
-                        const audioEl = document.createElement('audio');
-                        audioEl.srcObject = fluxDistant;
-                        audioEl.autoplay = true;
-                        audioEl.controls = true; // Permet de forcer manuellement la lecture si besoin
-                        audioEl.playsinline = true;
-                        audioEl.style.width = "200px";
-                        audioEl.style.height = "30px";
-                        audioEl.style.margin = "5px";
-                        audioEl.id = "audio-" + idDistant;
-                        
-                        // Label pour savoir qui on écoute
-                        const label = document.createElement('p');
-                        label.innerText = "Joueur " + idDistant;
-                        label.style.fontSize = "12px";
-                        label.style.color = "#888";
-                        label.id = "label-" + idDistant;
-
-                        document.getElementById('audios-distants').appendChild(label);
-                        document.getElementById('audios-distants').appendChild(audioEl);
-
-                        const ctx = audioContext;
-                        if (ctx.state === 'suspended') {
-                            ctx.resume();
-                        }
-
-                        const sourceDistante = ctx.createMediaStreamSource(fluxDistant);
-                        const gainDistant = ctx.createGain();
-                        
-                        gainDistant.gain.value = 0; // Géré par le script de distance
-                        
-                        sourceDistante.connect(gainDistant);
-                        gainDistant.connect(ctx.destination); 
-                        
-                        noeudsGainDistants[idDistant] = gainDistant;
-                    };
-
-                    if (initierOffre) {
-                        peer.onnegotiationneeded = async () => {
-                            const offer = await peer.createOffer();
-                            await peer.setLocalDescription(offer);
-                            socket.emit('signal-audio', { cible: idDistant, signal: offer });
-                        };
                     }
-                }
+
+                    // Si le joueur est assez proche, le navigateur génère et joue le son reçu du serveur
+                    if (volumeCalculé > 0) {
+                        const bufferAudio = audioContext.createBuffer(1, donnéesBrutes.length, audioContext.sampleRate);
+                        bufferAudio.getChannelData(0).set(donnéesBrutes);
+
+                        const sourceLecture = audioContext.createBufferSource();
+                        sourceLecture.buffer = bufferAudio;
+
+                        const gainLecture = audioContext.createGain();
+                        gainLecture.gain.value = volumeCalculé;
+
+                        sourceLecture.connect(gainLecture);
+                        gainLecture.connect(audioContext.destination);
+                        
+                        // Joue le son instantanément dans le navigateur
+                        sourceLecture.start();
+                    }
+                });
 
                 async function calculerDistancesAudio() {
                     if (!monId || !audioContext) return;
@@ -337,58 +270,27 @@ app.get('/', (req, res) => {
                             body: JSON.stringify({ userId: monId, x: 0, y: 0, z: 0 })
                         });
                         const data = await response.json();
-                        if (!data.positions || !data.positions[monId]) return;
-                        
-                        const maPos = data.positions[monId];
-
-                        Object.keys(noeudsGainDistants).forEach(idDistant => {
-                            const posAutre = data.positions[idDistant];
-                            const playerAudio = document.getElementById("audio-" + idDistant);
-                            
-                            if (posAutre && posAutre.robloxActive) {
-                                const dx = maPos.x - posAutre.x;
-                                const dy = maPos.y - posAutre.y;
-                                const dz = maPos.z - posAutre.z;
-                                const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
-
-                                if (distance <= DISTANCE_MAX) {
-                                    let volumeCalculé = 1 - (distance / DISTANCE_MAX);
-                                    
-                                    // On applique le volume sur le moteur Web Audio
-                                    noeudsGainDistants[idDistant].gain.setTargetAtTime(volumeCalculé, audioContext.currentTime, 0.1);
-                                    
-                                    // SÉCURITÉ : On force aussi le volume directement sur le lecteur HTML5 au cas où le Web Audio API bloque
-                                    if(playerAudio) playerAudio.volume = volumeCalculé;
-                                } else {
-                                    noeudsGainDistants[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
-                                    if(playerAudio) playerAudio.volume = 0;
-                                }
-                            } else {
-                                noeudsGainDistants[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
-                                if(playerAudio) playerAudio.volume = 0;
-                            }
-                        });
-
+                        if (data.positions) {
+                            positionsServeurCache = data.positions;
+                        }
                     } catch (e) {}
                 }
 
                 function toggleMute() {
-                    if(!monStream || !gainNode) return;
+                    if(!monStream) return;
                     estMute = !estMute;
                     monStream.getAudioTracks().forEach(track => track.enabled = !estMute);
                     
                     const btn = document.getElementById('btn-mute');
                     if(estMute) {
-                        gainNode.gain.value = 0;
                         btn.innerText = "Démuter";
                         btn.style.background = "#00ff64";
                         document.getElementById('statut').innerText = "⏸️ Micro coupé (Mute)";
                         document.getElementById('statut').style.color = "#ff4141";
                     } else {
-                        gainNode.gain.value = document.getElementById('volume-slider').value;
                         btn.innerText = "Muter";
                         btn.style.background = "#ff9d00";
-                        document.getElementById('statut').innerText = "🔴 Connexion active ! Laisse cet onglet ouvert.";
+                        document.getElementById('statut').innerText = "🔴 Stream en direct connecté !";
                         document.getElementById('statut').style.color = "#00ff64";
                     }
                     socket.emit('toggle-mute', estMute);
@@ -398,13 +300,10 @@ app.get('/', (req, res) => {
                     socket.emit('leave-voice');
                     estMute = false;
                     
-                    Object.keys(connexionsPairs).forEach(id => {
-                        connexionsPairs[id].close();
-                    });
-                    connexionsPairs = {};
-                    noeudsGainDistants = {};
-                    document.getElementById('audios-distants').innerHTML = "";
-
+                    if (scriptProcessor) {
+                        scriptProcessor.disconnect();
+                        scriptProcessor = null;
+                    }
                     if (monStream) {
                         monStream.getTracks().forEach(track => track.stop());
                         monStream = null;
@@ -414,12 +313,6 @@ app.get('/', (req, res) => {
                     document.getElementById('barre-volume').style.width = "0%";
                     document.getElementById('statut-container').style.display = 'none';
                     document.getElementById('formulaire').style.display = 'block';
-                    
-                    const btn = document.getElementById('btn-mute');
-                    btn.innerText = "Muter";
-                    btn.style.background = "#ff9d00";
-                    document.getElementById('statut').innerText = "🔴 Connexion active ! Laisse cet onglet ouvert.";
-                    document.getElementById('statut').style.color = "#00ff64";
                 }
             </script>
         </body>
