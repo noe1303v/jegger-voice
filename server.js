@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 let positionsJoueurs = {};
-const DISTANCE_MAX_ENTENDRE = 80; // Distance max dans Roblox (en studs) pour s'entendre
+const DISTANCE_MAX_ENTENDRE = 80; 
 
 app.post('/update-positions', (req, res) => {
     const { userId, username, x, y, z } = req.body;
@@ -47,7 +47,6 @@ app.post('/update-positions', (req, res) => {
     res.json({ success: true, positions: positionsJoueurs });
 });
 
-// Gestion du Peer-to-Peer Audio (WebRTC via Socket.io)
 io.on('connection', (socket) => {
     
     socket.on('join-voice', (userId) => {
@@ -63,17 +62,24 @@ io.on('connection', (socket) => {
         positionsJoueurs[idString].isMuted = false;
         positionsJoueurs[idString].lastUpdate = Date.now();
         
-        // On signale aux autres qu'un nouveau joueur est prêt à échanger du son
         socket.to("salon-vocal-global").emit('joueur-rejoint', idString);
         console.log(`[SERVEUR] Joueur ${idString} connecté au vocal.`);
     });
 
-    // Relais des clés de connexion WebRTC (Signaling)
     socket.on('signal-audio', (data) => {
         io.to("salon-vocal-global").emit('relais-signal', {
             emetteur: socket.userId,
             cible: data.cible,
             signal: data.signal
+        });
+    });
+
+    // Échange des candidats ICE essentiels pour passer outre les pare-feux des box internet
+    socket.on('ice-candidate', (data) => {
+        io.to("salon-vocal-global").emit('relais-ice', {
+            emetteur: socket.userId,
+            cible: data.cible,
+            candidate: data.candidate
         });
     });
 
@@ -135,7 +141,7 @@ app.get('/', (req, res) => {
                 </div>
             </div>
 
-            <div id="audios-distants"></div>
+            <div id="audios-distants" style="display:none;"></div>
             
             <p style="color: #888; margin-top: 40px; font-size: 14px;">Laisse cet onglet ouvert en arrière-plan pendant que tu joues.</p>
 
@@ -149,8 +155,8 @@ app.get('/', (req, res) => {
                 let estMute = false;
                 let monId = null;
 
-                let connexionsPairs = {}; // Stocke les liaisons WebRTC avec les autres
-                let noeudsGainDistants = {}; // Stocke le contrôle du volume de chaque joueur
+                let connexionsPairs = {}; 
+                let noeudsGainDistants = {}; 
 
                 const configurationPeer = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
@@ -194,7 +200,6 @@ app.get('/', (req, res) => {
                         }
                         verifierVolume();
 
-                        // Actualisation en boucle de la distance audio (3D Proximity)
                         setInterval(calculerDistancesAudio, 500);
 
                     } catch(err) {
@@ -203,13 +208,11 @@ app.get('/', (req, res) => {
                     }
                 }
 
-                // Quand un autre joueur rejoint le vocal, on ouvre le tunnel de communication
                 socket.on('joueur-rejoint', async (idDistant) => {
                     if (idDistant === monId) return;
                     creerLiaisonPeer(idDistant, true);
                 });
 
-                // Réception des signaux de configuration réseau
                 socket.on('relais-signal', async (data) => {
                     if (data.cible !== monId) return;
                     
@@ -225,6 +228,15 @@ app.get('/', (req, res) => {
                     }
                 });
 
+                socket.on('relais-ice', async (data) => {
+                    if (data.cible !== monId) return;
+                    if (connexionsPairs[data.emetteur]) {
+                        try {
+                            await connexionsPairs[data.emetteur].addIceCandidate(new RTCIceCandidate(data.candidate));
+                        } catch(e) {}
+                    }
+                });
+
                 function creerLiaisonPeer(idDistant, initierOffre) {
                     const peer = new RTCPeerConnection(configurationPeer);
                     connexionsPairs[idDistant] = peer;
@@ -233,25 +245,36 @@ app.get('/', (req, res) => {
 
                     peer.onicecandidate = (event) => {
                         if (event.candidate) {
-                            // Pas besoin de forcer les candidats ICE séparément avec cette architecture simplifiée
+                            socket.emit('ice-candidate', { cible: idDistant, candidate: event.candidate });
                         }
                     };
 
-                    // Quand on reçoit la voix de l'autre joueur
                     peer.ontrack = (event) => {
-                        if (noeudsGainDistants[idDistant]) return; // Déjà configuré
+                        if (noeudsGainDistants[idDistant]) return;
 
                         const fluxDistant = event.streams[0];
                         
-                        // Création du système audio spatialisé pour ce joueur précis
+                        // Création d'un élément audio HTML pour forcer le navigateur à décoder le son
+                        const audioEl = document.createElement('audio');
+                        audioEl.srcObject = fluxDistant;
+                        audioEl.autoplay = true;
+                        audioEl.playsinline = true;
+                        document.getElementById('audios-distants').appendChild(audioEl);
+
                         const ctx = audioContext;
+                        
+                        // Forcer l'activation de l'AudioContext si le navigateur l'a mis en pause
+                        if (ctx.state === 'suspended') {
+                            ctx.resume();
+                        }
+
                         const sourceDistante = ctx.createMediaStreamSource(fluxDistant);
                         const gainDistant = ctx.createGain();
                         
-                        gainDistant.gain.value = 0; // Muet par défaut tant qu'on ne connaît pas sa position
+                        gainDistant.gain.value = 0; 
                         
                         sourceDistante.connect(gainDistant);
-                        gainDistant.connect(ctx.destination); // Envoi dans tes haut-parleurs/écouteurs
+                        gainDistant.connect(ctx.destination); 
                         
                         noeudsGainDistants[idDistant] = gainDistant;
                     };
@@ -265,51 +288,41 @@ app.get('/', (req, res) => {
                     }
                 }
 
-                // Fonction magique qui calcule la distance et ajuste le volume en direct
-                async function calculerDistancesAudio() {
+                async function calcularDistancesAudio() {
                     if (!monId || !audioContext) return;
 
                     try {
-                        // Demande la liste des positions au serveur
                         const response = await fetch('/update-positions', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ userId: monId, x: 0, y: 0, z: 0 }) // Demande passive
+                            body: JSON.stringify({ userId: monId, x: 0, y: 0, z: 0 })
                         });
                         const data = await response.json();
-                        
                         if (!data.positions || !data.positions[monId]) return;
                         
                         const maPos = data.positions[monId];
 
-                        // Pour chaque joueur dont on reçoit la voix
                         Object.keys(noeudsGainDistants).forEach(idDistant => {
                             const posAutre = data.positions[idDistant];
                             
                             if (posAutre && posAutre.robloxActive) {
-                                // Formule mathématique de distance 3D (Pythagore)
                                 const dx = maPos.x - posAutre.x;
                                 const dy = maPos.y - posAutre.y;
                                 const dz = maPos.z - posAutre.z;
                                 const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
                                 if (distance <= ${DISTANCE_MAX_ENTENDRE}) {
-                                    // Plus il est proche, plus le volume est fort (Linear Rolloff)
                                     let volumeCalculé = 1 - (distance / ${DISTANCE_MAX_ENTENDRE});
                                     noeudsGainDistants[idDistant].gain.setTargetAtTime(volumeCalculé, audioContext.currentTime, 0.1);
                                 } else {
-                                    // Trop loin -> Muet
                                     noeudsGainDistants[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
                                 }
                             } else {
-                                // Pas sur Roblox -> Muet
                                 noeudsGainDistants[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
                             }
                         });
 
-                    } catch (e) {
-                        console.error("Erreur calcul distance audio:", e);
-                    }
+                    } catch (e) {}
                 }
 
                 function toggleMute() {
@@ -343,6 +356,7 @@ app.get('/', (req, res) => {
                     });
                     connexionsPairs = {};
                     noeudsGainDistants = {};
+                    document.getElementById('audios-distants').innerHTML = "";
 
                     if (monStream) {
                         monStream.getTracks().forEach(track => track.stop());
