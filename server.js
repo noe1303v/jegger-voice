@@ -114,14 +114,14 @@ app.get('/', (req, res) => {
             <h1 style="color: #00a2ff;">Jegger City Voice Connect</h1>
             <p style="font-size: 18px; margin-bottom: 30px;">Active ton micro de proximité pour le serveur de jeu.</p>
             
-            <div id="box-connexion" style="background: #2a2a2a; padding: 30px; display: inline-block; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); min-width: 300px;">
+            <div id="box-connexion" style="background: #2a2a2a; padding: 30px; display: inline-block; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); min-width: 320px;">
                 <div id="formulaire">
                     <input type="text" id="uid" placeholder="Entre ton ID Roblox" style="padding: 12px; font-size: 16px; border-radius: 5px; border: none; width: 250px; text-align: center; margin-bottom: 20px;"><br>
                     <button onclick="lancerAudio()" style="padding: 12px 25px; font-size: 16px; background: #00a2ff; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; margin-bottom: 10px;">Lancer la Connexion</button>
                 </div>
                 
                 <div id="statut-container" style="display: none;">
-                    <p id="statut" style="color: #00ff64; font-size: 18px; font-weight: bold; margin-bottom: 20px;">🔴 Connexion active ! Laisse cet onglet ouvert.</p>
+                    <p id="statut" style="color: #00ff64; font-size: 18px; font-weight: bold; margin-bottom: 25px;">🔴 Connexion active ! Laisse cet onglet ouvert.</p>
                     
                     <div style="width: 250px; height: 15px; background: #444; border-radius: 10px; margin: 0 auto 20px auto; overflow: hidden;">
                         <div id="barre-volume" style="width: 0%; height: 100%; background: #00ff64; transition: width 0.05s ease;"></div>
@@ -139,7 +139,7 @@ app.get('/', (req, res) => {
                 </div>
             </div>
 
-            <div id="audios-distants" style="display:none;"></div>
+            <div id="audios-distants"></div>
             
             <p style="color: #888; margin-top: 40px; font-size: 14px;">Laisse cet onglet ouvert en arrière-plan pendant que tu joues.</p>
 
@@ -156,8 +156,15 @@ app.get('/', (req, res) => {
                 let connexionsPairs = {}; 
                 let noeudsGainDistants = {}; 
 
-                const configurationPeer = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-                const DISTANCE_MAX = 80; // Correction de la variable en brute dure
+                const configurationPeer = { 
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun.services.mozilla.com' }
+                    ] 
+                };
+                const DISTANCE_MAX = 80;
 
                 async function lancerAudio() {
                     monId = document.getElementById('uid').value.trim();
@@ -165,12 +172,18 @@ app.get('/', (req, res) => {
                     
                     try {
                         monStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                        
+                        // Initialisation et déblocage immédiat de l'AudioContext dès le clic utilisateur
+                        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        if (audioContext.state === 'suspended') {
+                            await audioContext.resume();
+                        }
+
                         socket.emit('join-voice', monId);
                         
                         document.getElementById('formulaire').style.display = 'none';
                         document.getElementById('statut-container').style.display = 'block';
                         
-                        audioContext = new (window.AudioContext || window.webkitAudioContext)();
                         analyser = audioContext.createAnalyser();
                         gainNode = audioContext.createGain();
                         
@@ -240,7 +253,9 @@ app.get('/', (req, res) => {
                     const peer = new RTCPeerConnection(configurationPeer);
                     connexionsPairs[idDistant] = peer;
 
-                    monStream.getTracks().forEach(track => peer.addTrack(track, monStream));
+                    if (monStream) {
+                        monStream.getTracks().forEach(track => peer.addTrack(track, monStream));
+                    }
 
                     peer.onicecandidate = (event) => {
                         if (event.candidate) {
@@ -257,8 +272,10 @@ app.get('/', (req, res) => {
                         audioEl.srcObject = fluxDistant;
                         audioEl.autoplay = true;
                         audioEl.playsinline = true;
+                        audioEl.style.display = "none";
                         document.getElementById('audios-distants').appendChild(audioEl);
 
+                        // Récupération sécurisée du contexte initié au démarrage
                         const ctx = audioContext;
                         if (ctx.state === 'suspended') {
                             ctx.resume();
