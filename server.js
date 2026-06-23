@@ -139,7 +139,7 @@ app.get('/', (req, res) => {
                 </div>
             </div>
 
-            <div id="audios-distants"></div>
+            <div id="audios-distants" style="margin-top: 20px;"></div>
             
             <p style="color: #888; margin-top: 40px; font-size: 14px;">Laisse cet onglet ouvert en arrière-plan pendant que tu joues.</p>
 
@@ -156,13 +156,16 @@ app.get('/', (req, res) => {
                 let connexionsPairs = {}; 
                 let noeudsGainDistants = {}; 
 
+                // AJOUT DE SERVEURS TURN PUBLICS ET DE SECOURS POUR FORCER LE PASSAGE DES BOX INTERNET
                 const configurationPeer = { 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
                         { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun.services.mozilla.com' }
-                    ] 
+                        { urls: 'stun:stun.services.mozilla.com' },
+                        { urls: 'stun:global.stun.twilio.com:3478' }
+                    ],
+                    iceTransportPolicy: 'all'
                 };
                 const DISTANCE_MAX = 80;
 
@@ -173,18 +176,16 @@ app.get('/', (req, res) => {
                     try {
                         monStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                         
-                        // 1. Initialisation classique du contexte audio
                         audioContext = new (window.AudioContext || window.webkitAudioContext)();
                         
-                        // 2. L'ASTUCE : On force le navigateur à émettre un son inaudible immédiatement 
-                        // pour valider la sortie haut-parleur dès le clic sur le bouton.
+                        // Déclencheur sonore ultra-rapide pour déverrouiller définitivement l'onglet web
                         const osc = audioContext.createOscillator();
                         const gainDeclencheur = audioContext.createGain();
-                        gainDeclencheur.gain.setValueAtTime(0.001, audioContext.currentTime); // Quasi-silencieux
+                        gainDeclencheur.gain.setValueAtTime(0.001, audioContext.currentTime);
                         osc.connect(gainDeclencheur);
                         gainDeclencheur.connect(audioContext.destination);
                         osc.start();
-                        osc.stop(audioContext.currentTime + 0.1); // S'arrête après 100ms
+                        osc.stop(audioContext.currentTime + 0.1);
 
                         if (audioContext.state === 'suspended') {
                             await audioContext.resume();
@@ -279,11 +280,26 @@ app.get('/', (req, res) => {
 
                         const fluxDistant = event.streams[0];
                         
+                        // DOUBLE SÉCURITÉ : On crée un élément HTML5 <audio> PHYSIQUE et VISIBLE (mais discret)
+                        // Les navigateurs refusent de lire les flux audio invisibles créés à la volée.
                         const audioEl = document.createElement('audio');
                         audioEl.srcObject = fluxDistant;
                         audioEl.autoplay = true;
+                        audioEl.controls = true; // Permet de forcer manuellement la lecture si besoin
                         audioEl.playsinline = true;
-                        audioEl.style.display = "none";
+                        audioEl.style.width = "200px";
+                        audioEl.style.height = "30px";
+                        audioEl.style.margin = "5px";
+                        audioEl.id = "audio-" + idDistant;
+                        
+                        // Label pour savoir qui on écoute
+                        const label = document.createElement('p');
+                        label.innerText = "Joueur " + idDistant;
+                        label.style.fontSize = "12px";
+                        label.style.color = "#888";
+                        label.id = "label-" + idDistant;
+
+                        document.getElementById('audios-distants').appendChild(label);
                         document.getElementById('audios-distants').appendChild(audioEl);
 
                         const ctx = audioContext;
@@ -294,7 +310,7 @@ app.get('/', (req, res) => {
                         const sourceDistante = ctx.createMediaStreamSource(fluxDistant);
                         const gainDistant = ctx.createGain();
                         
-                        gainDistant.gain.value = 0; 
+                        gainDistant.gain.value = 0; // Géré par le script de distance
                         
                         sourceDistante.connect(gainDistant);
                         gainDistant.connect(ctx.destination); 
@@ -327,6 +343,7 @@ app.get('/', (req, res) => {
 
                         Object.keys(noeudsGainDistants).forEach(idDistant => {
                             const posAutre = data.positions[idDistant];
+                            const playerAudio = document.getElementById("audio-" + idDistant);
                             
                             if (posAutre && posAutre.robloxActive) {
                                 const dx = maPos.x - posAutre.x;
@@ -336,12 +353,19 @@ app.get('/', (req, res) => {
 
                                 if (distance <= DISTANCE_MAX) {
                                     let volumeCalculé = 1 - (distance / DISTANCE_MAX);
+                                    
+                                    // On applique le volume sur le moteur Web Audio
                                     noeudsGainDistants[idDistant].gain.setTargetAtTime(volumeCalculé, audioContext.currentTime, 0.1);
+                                    
+                                    // SÉCURITÉ : On force aussi le volume directement sur le lecteur HTML5 au cas où le Web Audio API bloque
+                                    if(playerAudio) playerAudio.volume = volumeCalculé;
                                 } else {
                                     noeudsGainDistants[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
+                                    if(playerAudio) playerAudio.volume = 0;
                                 }
                             } else {
                                 noeudsGainDistants[idDistant].gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
+                                if(playerAudio) playerAudio.volume = 0;
                             }
                         });
 
