@@ -5,56 +5,38 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, { cors: { origin: "*" }, maxHttpBufferSize: 1e7 });
+const io = socketIo(server, { cors: { origin: "*" } });
 
-const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
 let positionsJoueurs = {};
 
-// Route pour Roblox
 app.post('/update-positions', (req, res) => {
     const { userId, username, x, y, z } = req.body;
     if (!userId) return res.status(400).send();
     
-    const idString = userId.toString();
-
-    if (!positionsJoueurs[idString]) {
-        positionsJoueurs[idString] = {
-            username: username,
-            x: 0, y: 0, z: 0,
-            vocalActive: false,
-            isMuted: false,
-            robloxActive: true
-        };
-    }
-
-    positionsJoueurs[idString].x = parseFloat(x);
-    positionsJoueurs[idString].y = parseFloat(y);
-    positionsJoueurs[idString].z = parseFloat(z);
-    positionsJoueurs[idString].robloxActive = true;
-    positionsJoueurs[idString].lastUpdate = Date.now();
-
+    const id = userId.toString();
+    if (!positionsJoueurs[id]) positionsJoueurs[id] = { username, x:0, y:0, z:0, vocalActive: false, isMuted: false };
+    
+    positionsJoueurs[id].x = parseFloat(x);
+    positionsJoueurs[id].y = parseFloat(y);
+    positionsJoueurs[id].z = parseFloat(z);
+    positionsJoueurs[id].lastUpdate = Date.now();
+    
     res.json({ positions: positionsJoueurs });
 });
 
 io.on('connection', (socket) => {
-    socket.on('join-voice', (userId) => {
-        const idString = userId.toString();
-        socket.userId = idString;
-        if (!positionsJoueurs[idString]) {
-            positionsJoueurs[idString] = { vocalActive: true, isMuted: false };
-        } else {
-            positionsJoueurs[idString].vocalActive = true;
-        }
-        socket.join("salon-global");
+    socket.on('join-voice', (id) => {
+        socket.userId = id.toString();
+        if (positionsJoueurs[socket.userId]) positionsJoueurs[socket.userId].vocalActive = true;
+        io.emit('update-list', positionsJoueurs);
     });
 
     socket.on('toggle-mute', (data) => {
-        if (positionsJoueurs[data.userId]) {
-            positionsJoueurs[data.userId].isMuted = data.mute;
-        }
+        if (positionsJoueurs[data.userId]) positionsJoueurs[data.userId].isMuted = data.mute;
+        io.emit('update-list', positionsJoueurs);
     });
 
     socket.on('flux-audio-brut', (buffer) => {
@@ -62,11 +44,9 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        if (socket.userId && positionsJoueurs[socket.userId]) {
-            positionsJoueurs[socket.userId].vocalActive = false;
-        }
+        if (socket.userId && positionsJoueurs[socket.userId]) positionsJoueurs[socket.userId].vocalActive = false;
+        io.emit('update-list', positionsJoueurs);
     });
 });
 
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-server.listen(PORT, () => console.log(`Serveur prêt sur le port ${PORT}`));
+server.listen(3000, () => console.log("Serveur actif"));
